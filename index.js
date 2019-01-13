@@ -8,9 +8,26 @@ var bcrypt = require("bcrypt-nodejs");
 var Sequelize = require('sequelize');
 const Op = Sequelize.Op;
 var sequelize = new Sequelize('db_shop', 'root', '', {
-    dialect: 'mysql'
+    dialect: 'mysql',
+    define :{
+      timestamps: false
+    }
 });
 
+const nodemailer = require("nodemailer"); //mailer
+let transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'x.hell.boys.x@gmail.com',
+    pass: 'zblaclcezujwwatn'
+  }
+});
+
+app.use(function(req, res, next) {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  next();
+});
 
 
 /*********************** Entities *************************** */
@@ -27,10 +44,8 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
     email:Sequelize.STRING,
     phone:Sequelize.STRING,
     adress:Sequelize.STRING,
-    gendre:Sequelize.STRING,
+    gender:Sequelize.STRING,
     
-  }, {
-    timestamps: false
   });
    
   var Ad = sequelize.define('ad', {
@@ -44,8 +59,6 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
     transaction:Sequelize.STRING,
     date: Sequelize.DATE,
     price:Sequelize.FLOAT,
-  }, {
-    timestamps: false
   });
 
   var Contract = sequelize.define('contract', {
@@ -59,8 +72,6 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
     id_buyer:Sequelize.INTEGER,
     id_ad:Sequelize.INTEGER,
     date: Sequelize.DATE,
-  }, {
-    timestamps: false
   });
 
   var Favorite = sequelize.define('favorite', {
@@ -71,8 +82,6 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
       },
     id_user:Sequelize.INTEGER,
     id_ad:Sequelize.INTEGER,
-  }, {
-    timestamps: false
   });
 
   var House = sequelize.define('house', {
@@ -90,8 +99,6 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
       description:Sequelize.STRING,
       nbr_room:Sequelize.INTEGER,
       category:Sequelize.STRING
-  }, {
-    timestamps: false
   });
 
   
@@ -100,9 +107,9 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
 
   /****************** SIGN IN **********************/
   app.get('/signin', function (req, res) {  
-    User.findOne({where: { username: req.body.username }}).then( function (user) {
+    User.findOne({where: { email: req.query.email }}).then( function (user) {
       if (user) {
-        bcrypt.compare(req.body.password , user.password , function (err , result) {
+        bcrypt.compare(req.query.password , user.password , function (err , result) {
           if (result == true) {
             //// getting the token to access the server
             var token = jwt.sign({ username: user.username, password: user.password }, secret, { expiresIn: '24h' }); // Logged in: Give user token
@@ -114,7 +121,7 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
               email:user.email,
               phone:user.phone,
               adress:user.adress,
-              gendre:user.gendre,
+              gender:user.gender,
               token:token
             });
           } else {
@@ -122,11 +129,70 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
           }
         })
       } else {
-        res.send("incorrect username");
+        res.send("incorrect email");
       }
     });
       
   });
+
+  /****************** ADD USER **********************/
+  app.post('/adduser',function(req , res){
+    var u = req.body;
+    u.password = bcrypt.hashSync(u.password);
+    User.create(u).then(user => res.json(user));
+
+  });
+
+
+  /****************** SEND VALIDATION CODE **********************/
+  app.post('/sendemail',function(req , res){
+
+    let reciever = req.body.email;
+    User.findOne({where: { email: req.body.email }}).then( function (user) {
+      if (user) {
+        var number = Math.floor(100000 + Math.random() * 900000);
+        try {
+    
+          // setup email data with unicode symbols
+          let mailOptions = {
+            from: '"eShop 👻" <x.hell.boys.x@gmail.com>', // sender address
+            to: reciever, // list of receivers
+            subject: "Validation code ✔", // Subject line
+            text: "Your Validation Code is "+number, // plain text body
+            html: "<b>Your Validation Code is "+number+"</b>" // html body
+          };
+    
+          // send mail with defined transport object
+          let info =  transporter.sendMail(mailOptions);
+    
+          sequelize.query("insert into validations (id_user,code) values ("+user.id+","+number+") ON DUPLICATE KEY UPDATE code = '"+number+"'")
+                    .then( res.send("sent"));
+         
+        } catch (err){
+          console.log(err);
+          res.status(500).send();
+        }
+      } else {
+        res.send("incorrect email");
+      }
+    });
+  });
+
+  /****************** VALIDATE CODE **********************/
+  app.post('/validatecode',function(req , res){
+    sequelize.query("select count(*) as found from validations where code = "+req.body.code+" and id_user in (select id from users where email = '"+req.body.email+"')",
+              { type: sequelize.QueryTypes.SELECT}).then(r => res.send(r[0]));
+  });
+
+
+  /****************** RESET PASSWORD **********************/
+  app.put('/resetpassword',function(req , res){
+    
+    User.update({password:bcrypt.hashSync(req.body.new_password)} , {where : {email : req.body.email}})
+          .then( r => res.json(r[0]));
+     
+  });
+
 
   // Middleware for Routes that checks for token - Place all routes after this route that require the user to already be logged in
   app.use(function(req, res, next) {
@@ -162,13 +228,7 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
       
   });
 
-  /****************** ADD USER **********************/
-  app.post('/adduser',function(req , res){
-    var u = req.body;
-    u.password = bcrypt.hashSync(u.password);
-    User.create(u).then(user => res.json(user));
-
-  });
+  
 
   /****************** UPDATE USER **********************/
   app.put('/updateuser',function(req , res){
@@ -186,6 +246,7 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
     
   });
 
+  
   
 
 
@@ -383,7 +444,7 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
   app.get('/contracts', function (req, res) {
    
     sequelize.
-    query("select c.id as id_contract , s.id as seller , s.name as seller_name , s.surname as seller_surname , s.email as seller_email , s.phone as seller_phone, s.adress as seller_adress , s.gendre as seller_gendre , b.id as buyer , b.name as buyer_name , b.surname as buyer_surname , b.email as buyer_email , b.phone as buyer_phone, b.adress as buyer_adress , b.gendre as buyer_gendre , ad.id as id_ad , ad.title, ad.transaction, ad.date as date_ad , ad. price , h.id as id_house,h.title,h.city , h.adress , h.lat , h.lng , h.surface , h.description , h.nbr_room ,h.category ,c.date as contract_date from contracts  c inner join users s on c.id_seller = s.id inner join users b on c.id_buyer = b.id inner join ads ad on ad.id = c.id_ad inner join houses h on ad.id_house = h.id",
+    query("select c.id as id_contract , s.id as seller , s.name as seller_name , s.surname as seller_surname , s.email as seller_email , s.phone as seller_phone, s.adress as seller_adress , s.gender as seller_gender , b.id as buyer , b.name as buyer_name , b.surname as buyer_surname , b.email as buyer_email , b.phone as buyer_phone, b.adress as buyer_adress , b.gender as buyer_gender , ad.id as id_ad , ad.title, ad.transaction, ad.date as date_ad , ad. price , h.id as id_house,h.title,h.city , h.adress , h.lat , h.lng , h.surface , h.description , h.nbr_room ,h.category ,c.date as contract_date from contracts  c inner join users s on c.id_seller = s.id inner join users b on c.id_buyer = b.id inner join ads ad on ad.id = c.id_ad inner join houses h on ad.id_house = h.id",
              { type: sequelize.QueryTypes.SELECT}).then( r => res.json(r));
       
   });
@@ -392,7 +453,7 @@ var sequelize = new Sequelize('db_shop', 'root', '', {
   app.get('/contract/:contractid', function (req, res) {
   
     sequelize.
-    query("select c.id as id_contract , s.id as seller , s.name as seller_name , s.surname as seller_surname , s.email as seller_email , s.phone as seller_phone, s.adress as seller_adress , s.gendre as seller_gendre , b.id as buyer , b.name as buyer_name , b.surname as buyer_surname , b.email as buyer_email , b.phone as buyer_phone, b.adress as buyer_adress , b.gendre as buyer_gendre , ad.id as id_ad ,ad.title, ad.transaction, ad.date as date_ad , ad. price , h.id as id_house,h.title,h.city , h.adress , h.lat , h.lng , h.surface , h.description , h.nbr_room ,h.category,c.date as contract_date from contracts  c inner join users s on c.id_seller = s.id inner join users b on c.id_buyer = b.id inner join ads ad on ad.id = c.id_ad inner join houses h on ad.id_house = h.id where c.id = "+req.params.contractid,
+    query("select c.id as id_contract , s.id as seller , s.name as seller_name , s.surname as seller_surname , s.email as seller_email , s.phone as seller_phone, s.adress as seller_adress , s.gender as seller_gender , b.id as buyer , b.name as buyer_name , b.surname as buyer_surname , b.email as buyer_email , b.phone as buyer_phone, b.adress as buyer_adress , b.gender as buyer_gender , ad.id as id_ad ,ad.title, ad.transaction, ad.date as date_ad , ad. price , h.id as id_house,h.title,h.city , h.adress , h.lat , h.lng , h.surface , h.description , h.nbr_room ,h.category,c.date as contract_date from contracts  c inner join users s on c.id_seller = s.id inner join users b on c.id_buyer = b.id inner join ads ad on ad.id = c.id_ad inner join houses h on ad.id_house = h.id where c.id = "+req.params.contractid,
              { type: sequelize.QueryTypes.SELECT}).then( r => res.json(r));
       
   });
